@@ -13,7 +13,8 @@
 
 // Based on tailscale/derp/derphttp/derphttp_client.go
 
-use anyhow::Context;
+use std::{future::Future, net::IpAddr};
+
 use bytes::Bytes;
 use data_encoding::BASE64URL;
 use http_body_util::Empty;
@@ -39,7 +40,7 @@ impl ClientBuilder {
     /// set to [`HTTP_UPGRADE_PROTOCOL`].
     ///
     /// [`HTTP_UPGRADE_PROTOCOL`]: crate::http::HTTP_UPGRADE_PROTOCOL
-    pub(super) async fn connect_relay(&self) -> Result<(Conn, SocketAddr)> {
+    pub(super) async fn connect_relay(&self) -> Result<(Conn, SocketAddr), Error> {
         let roots = rustls::RootCertStore {
             roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
         };
@@ -63,9 +64,7 @@ impl ClientBuilder {
         let url = self.url.clone();
         let tcp_stream = self.dial_url(&tls_connector).await?;
 
-        let local_addr = tcp_stream
-            .local_addr()
-            .context("No local addr for TCP stream")?;
+        let local_addr = tcp_stream.local_addr()?;
 
         debug!(server_addr = ?tcp_stream.peer_addr(), %local_addr, "TCP stream connected");
 
@@ -105,7 +104,10 @@ impl ClientBuilder {
     }
 
     /// Sends the HTTP upgrade request to the relay server.
-    async fn start_upgrade<T>(io: T, relay_url: RelayUrl) -> Result<hyper::Response<Incoming>>
+    async fn start_upgrade<T>(
+        io: T,
+        relay_url: RelayUrl,
+    ) -> Result<hyper::Response<Incoming>, Error>
     where
         T: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
@@ -145,7 +147,10 @@ impl ClientBuilder {
             .and_then(|s| rustls::pki_types::ServerName::try_from(s).ok())
     }
 
-    async fn dial_url(&self, tls_connector: &tokio_rustls::TlsConnector) -> Result<ProxyStream> {
+    async fn dial_url(
+        &self,
+        tls_connector: &tokio_rustls::TlsConnector,
+    ) -> Result<ProxyStream, Error> {
         if let Some(ref proxy) = self.proxy_url {
             let stream = self.dial_url_proxy(proxy.clone(), tls_connector).await?;
             Ok(ProxyStream::Proxied(stream))
@@ -155,7 +160,7 @@ impl ClientBuilder {
         }
     }
 
-    async fn dial_url_direct(&self) -> Result<tokio::net::TcpStream> {
+    async fn dial_url_direct(&self) -> Result<tokio::net::TcpStream, Error> {
         use tokio::net::TcpStream;
         debug!(%self.url, "dial url");
         let prefer_ipv6 = self.prefer_ipv6();
@@ -164,7 +169,7 @@ impl ClientBuilder {
             .resolve_host(&self.url, prefer_ipv6, DNS_TIMEOUT)
             .await?;
 
-        let port = url_port(&self.url).ok_or_else(|| anyhow!("Missing URL port"))?;
+        let port = url_port(&self.url).ok_or(Error::InvalidTargetPort)?;
         let addr = SocketAddr::new(dst_ip, port);
 
         debug!("connecting to {}", addr);
@@ -184,7 +189,7 @@ impl ClientBuilder {
         &self,
         proxy_url: Url,
         tls_connector: &tokio_rustls::TlsConnector,
-    ) -> Result<util::Chain<std::io::Cursor<Bytes>, MaybeTlsStream>> {
+    ) -> Result<util::Chain<std::io::Cursor<Bytes>, MaybeTlsStream>, Error> {
         use hyper_util::rt::TokioIo;
         use tokio::net::TcpStream;
         debug!(%self.url, %proxy_url, "dial url via proxy");
@@ -196,7 +201,7 @@ impl ClientBuilder {
             .resolve_host(&proxy_url, prefer_ipv6, DNS_TIMEOUT)
             .await?;
 
-        let proxy_port = url_port(&proxy_url).ok_or_else(|| anyhow!("Missing proxy url port"))?;
+        let proxy_port = url_port(&proxy_url).ok_or(Error::InvalidTargetPort)?;
         let proxy_addr = SocketAddr::new(proxy_ip, proxy_port);
 
         debug!(%proxy_addr, "connecting to proxy");
@@ -221,12 +226,9 @@ impl ClientBuilder {
         };
         let io = TokioIo::new(io);
 
-        let target_host = self
-            .url
-            .host_str()
-            .ok_or_else(|| anyhow!("Missing proxy host"))?;
+        let target_host = self.url.host_str().ok_or(Error::MissingProxyHost)?;
 
-        let port = url_port(&self.url).ok_or_else(|| anyhow!("invalid target port"))?;
+        let port = url_port(&self.url).ok_or(Error::InvalidTargetPort)?;
 
         // Establish Proxy Tunnel
         let mut req_builder = Request::builder()
@@ -266,9 +268,9 @@ impl ClientBuilder {
         }
 
         let upgraded = hyper::upgrade::on(res).await?;
-        let Ok(Parts { io, read_buf, .. }) = upgraded.downcast::<TokioIo<MaybeTlsStream>>() else {
-            bail!("Invalid upgrade");
-        };
+        let Parts { io, read_buf, .. } = upgraded
+            .downcast::<TokioIo<MaybeTlsStream>>()
+            .expect("only this upgrade used");
 
         let res = util::chain(std::io::Cursor::new(read_buf), io.into_inner());
 
@@ -288,9 +290,11 @@ impl ClientBuilder {
     }
 }
 
-fn host_header_value(relay_url: RelayUrl) -> Result<String> {
+fn host_header_value(relay_url: RelayUrl) -> Result<String, Error> {
     // grab the host, turns e.g. https://example.com:8080/xyz -> example.com.
-    let relay_url_host = relay_url.host_str().context("Invalid URL")?;
+    let relay_url_host = relay_url
+        .host_str()
+        .ok_or_else(|| Error::InvalidUrl(relay_url.clone().into()))?;
     // strip the trailing dot, if present: example.com. -> example.com
     let relay_url_host = relay_url_host.strip_suffix('.').unwrap_or(relay_url_host);
     // build the host header value (reserve up to 6 chars for the ":" and port digits):
@@ -315,18 +319,37 @@ fn url_port(url: &Url) -> Option<u16> {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum DnsError {
+    #[error(transparent)]
+    Timeout(#[from] tokio::time::error::Elapsed),
+    #[error("No response")]
+    NoResponse,
+    #[error("Resolve failed ipv4: {ipv4}, ipv6 {ipv6}")]
+    ResolveBoth {
+        ipv4: Box<DnsError>,
+        ipv6: Box<DnsError>,
+    },
+    #[error("missing host")]
+    MissingHost,
+    #[error(transparent)]
+    Resolve(#[from] hickory_resolver::ResolveError),
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
 
-    use anyhow::Result;
+    use testresult::TestResult;
     use tracing_test::traced_test;
 
     use super::*;
 
     #[test]
     #[traced_test]
-    fn test_host_header_value() -> Result<()> {
+    fn test_host_header_value() -> TestResult {
+        let _guard = iroh_test::logging::setup();
+
         let cases = [
             (
                 "https://euw1-1.relay.iroh.network.",

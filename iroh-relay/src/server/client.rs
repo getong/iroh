@@ -569,7 +569,7 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn test_client_actor_basic() -> Result<()> {
+    async fn test_client_actor_basic() -> TestResult {
         let (send_queue_s, send_queue_r) = mpsc::channel(10);
         let (disco_send_queue_s, disco_send_queue_r) = mpsc::channel(10);
         let (peer_gone_s, peer_gone_r) = mpsc::channel(10);
