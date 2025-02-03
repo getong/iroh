@@ -6,7 +6,6 @@ use std::{
     net::{IpAddr, Ipv6Addr, SocketAddr},
 };
 
-use anyhow::{bail, Context, Result};
 use hickory_resolver::{Resolver, TokioResolver};
 use iroh_base::{NodeAddr, NodeId};
 use n0_future::{
