@@ -16,8 +16,11 @@ use tokio_tungstenite_wasm::WebSocketStream;
 use tokio_util::codec::Framed;
 use tracing::debug;
 
-use super::{Error, KeyCache};
-use crate::protos::relay::{ClientInfo, Frame, MAX_PACKET_SIZE, PROTOCOL_VERSION};
+use super::{ConnectError, Error, KeyCache};
+use crate::protos::{
+    self,
+    relay::{ClientInfo, Frame, MAX_PACKET_SIZE, PROTOCOL_VERSION},
+};
 #[cfg(not(wasm_browser))]
 use crate::{client::streams::MaybeTlsStreamChained, protos::relay::RelayCodec};
 
@@ -30,6 +33,14 @@ pub enum ConnSendError {
     /// A protocol error.
     #[error("Protocol error")]
     Protocol(&'static str),
+}
+
+/// Error when handshaking with the server
+#[derive(Debug, thiserror::Error)]
+pub enum HandshakeError {
+    /// An IO error.
+    #[error("failed to send handshake message to the relay")]
+    Send(#[from] protos::relay::Error),
 }
 
 impl From<tokio_tungstenite_wasm::Error> for ConnSendError {
@@ -73,7 +84,7 @@ impl Conn {
         conn: WebSocketStream,
         key_cache: KeyCache,
         secret_key: &SecretKey,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, ConnectError> {
         let mut conn = Self::Ws { conn, key_cache };
 
         // exchange information with the server
@@ -88,7 +99,7 @@ impl Conn {
         conn: MaybeTlsStreamChained,
         key_cache: KeyCache,
         secret_key: &SecretKey,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, ConnectError> {
         let conn = Framed::new(conn, RelayCodec::new(key_cache));
 
         let mut conn = Self::Relay { conn };
@@ -101,7 +112,7 @@ impl Conn {
 }
 
 /// Sends the server handshake message.
-async fn server_handshake(writer: &mut Conn, secret_key: &SecretKey) -> Result<(), Error> {
+async fn server_handshake(writer: &mut Conn, secret_key: &SecretKey) -> Result<(), HandshakeError> {
     debug!("server_handshake: started");
     let client_info = ClientInfo {
         version: PROTOCOL_VERSION,

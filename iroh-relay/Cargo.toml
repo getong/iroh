@@ -129,7 +129,7 @@ tracing-test = "0.2.5"
 cfg_aliases = { version = "0.2" }
 
 [features]
-default = ["metrics", "server", "test-utils"]
+default = ["metrics"]
 server = [
     "dep:anyhow",
     "dep:clap",

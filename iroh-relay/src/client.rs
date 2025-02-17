@@ -20,7 +20,7 @@ use tracing::warn;
 use tracing::{debug, event, trace, Level};
 use url::Url;
 
-pub use self::conn::{ConnSendError, ReceivedMessage, SendMessage};
+pub use self::conn::{ConnSendError, HandshakeError, ReceivedMessage, SendMessage};
 #[cfg(not(wasm_browser))]
 use crate::dns::{DnsResolver, Error as DnsError};
 use crate::{
@@ -36,21 +36,65 @@ pub(crate) mod streams;
 #[cfg(not(wasm_browser))]
 mod util;
 
+/// Connection errors
+#[allow(missing_docs)]
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ConnectError {
+    #[error("Invalid URL for websocket {0}")]
+    InvalidWebsocketUrl(Url),
+    #[error("Invalid relay URL {0}")]
+    InvalidRelayUrl(Url),
+    #[error(transparent)]
+    Websocket(#[from] tokio_tungstenite_wasm::Error),
+    #[error(transparent)]
+    Handshake(#[from] HandshakeError),
+    #[error(transparent)]
+    Dial(#[from] DialError),
+    #[error("Unexpected status during upgrade: {0}")]
+    UnexpectedUpgradeStatus(hyper::StatusCode),
+    #[error("Failed to upgrade response")]
+    Upgrade(#[source] hyper::Error),
+    #[error("Invalid TLS servername")]
+    InvalidTlsServername,
+    #[error("No local address available")]
+    NoLocalAddr,
+    #[error("tls connection failed")]
+    Tls(#[source] std::io::Error),
+}
+
+/// Dialing errors
+#[allow(missing_docs)]
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum DialError {
+    #[error("Invliad target port")]
+    InvalidTargetPort,
+    #[error(transparent)]
+    Dns(#[from] DnsError),
+    #[error("Timeout")]
+    Timeout(#[from] time::Elapsed),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("Invalid URL {0}")]
+    InvalidUrl(Url),
+    #[error("Failed proxy connection: {0}")]
+    ProxyConnectInvalidStatus(hyper::StatusCode),
+    #[error("Invalid Proxy URL {0}")]
+    ProxyInvalidUrl(Url),
+    #[error("failed to establish proxy connection")]
+    ProxyConnect(#[source] hyper::Error),
+    #[error("Invalid proxy TLS servername")]
+    ProxyInvalidTlsServername,
+    #[error("Invliad proxy target port")]
+    ProxyInvalidTargetPort,
+}
+
 /// Client related errors
 #[allow(missing_docs)]
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
-    #[error("Invliad target port")]
-    InvalidTargetPort,
-    #[error("Invalid URL {0}")]
-    InvalidUrl(Url),
-    #[error("Invalid Proxy URL {0}")]
-    InvalidProxyUrl(Url),
-    #[error("Invalid URL for websocket {0}")]
-    InvalidWebsocketUrl(Url),
-    #[error(transparent)]
-    Websocket(#[from] tokio_tungstenite_wasm::Error),
     #[cfg(not(wasm_browser))]
     #[error(transparent)]
     Dns(#[from] DnsError),
@@ -58,10 +102,6 @@ pub enum Error {
     Hyper(#[from] hyper::Error),
     #[error(transparent)]
     InvalidDnsName(#[from] rustls::pki_types::InvalidDnsNameError),
-    #[error("Unexpected status during upgrade: {0}")]
-    UnexpectedUpgradeStatus(hyper::StatusCode),
-    #[error("Failed proxy connection: {0}")]
-    FailedProxyConnection(hyper::StatusCode),
     #[error(transparent)]
     ProtoRelay(#[from] crate::protos::relay::Error),
     #[error(transparent)]
@@ -77,6 +117,8 @@ pub enum Error {
     #[cfg(wasm_browser)]
     #[error("The relay protocol is not available in browsers")]
     RelayProtoNotAvailable,
+    #[error(transparent)]
+    Websocket(#[from] tokio_tungstenite_wasm::Error),
 }
 
 /// Build a Client.
@@ -180,7 +222,7 @@ impl ClientBuilder {
     }
 
     /// Establishes a new connection to the relay server.
-    pub async fn connect(&self) -> Result<Client, Error> {
+    pub async fn connect(&self) -> Result<Client, ConnectError> {
         let (conn, local_addr) = match self.protocol {
             Protocol::Websocket => {
                 let conn = self.connect_ws().await?;
@@ -207,14 +249,14 @@ impl ClientBuilder {
         Ok(Client { conn, local_addr })
     }
 
-    async fn connect_ws(&self) -> Result<Conn, Error> {
+    async fn connect_ws(&self) -> Result<Conn, ConnectError> {
         let mut dial_url = (*self.url).clone();
         dial_url.set_path(RELAY_PATH);
         // The relay URL is exchanged with the http(s) scheme in tickets and similar.
         // We need to use the ws:// or wss:// schemes when connecting with websockets, though.
         dial_url
             .set_scheme(if self.use_tls() { "wss" } else { "ws" })
-            .map_err(|_| Error::InvalidWebsocketUrl(dial_url.clone()))?;
+            .map_err(|_| ConnectError::InvalidWebsocketUrl(dial_url.clone()))?;
 
         debug!(%dial_url, "Dialing relay by websocket");
 
