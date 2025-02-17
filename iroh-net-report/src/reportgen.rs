@@ -1181,7 +1181,7 @@ async fn relay_lookup_ipv4_staggered(
                     .map(|ip| ip.to_canonical())
                     .map(|addr| SocketAddr::new(addr, port))
                     .ok_or(anyhow!("No suitable relay addr found")),
-                Err(err) => Err(err.context("No suitable relay addr found")),
+                Err(err) => Err(anyhow::Error::from(err).context("No suitable relay addr found")),
             }
         }
         Some(url::Host::Ipv4(addr)) => Ok(SocketAddr::new(addr.into(), port)),
@@ -1211,7 +1211,7 @@ async fn relay_lookup_ipv6_staggered(
                     .map(|ip| ip.to_canonical())
                     .map(|addr| SocketAddr::new(addr, port))
                     .ok_or(anyhow!("No suitable relay addr found")),
-                Err(err) => Err(err.context("No suitable relay addr found")),
+                Err(err) => Err(anyhow::Error::from(err).context("No suitable relay addr found")),
             }
         }
         Some(url::Host::Ipv4(_addr)) => Err(anyhow!("No suitable relay addr found")),

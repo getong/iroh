@@ -10,8 +10,6 @@ use std::{
 };
 
 use conn::Conn;
-#[cfg(not(wasm_browser))]
-use connect_relay::DnsError;
 use iroh_base::{RelayUrl, SecretKey};
 use n0_future::{
     split::{split, SplitSink, SplitStream},
@@ -24,7 +22,7 @@ use url::Url;
 
 pub use self::conn::{ConnSendError, ReceivedMessage, SendMessage};
 #[cfg(not(wasm_browser))]
-use crate::dns::DnsResolver;
+use crate::dns::{DnsResolver, Error as DnsError};
 use crate::{
     http::{Protocol, RELAY_PATH},
     KeyCache,

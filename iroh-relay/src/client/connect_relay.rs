@@ -13,8 +13,6 @@
 
 // Based on tailscale/derp/derphttp/derphttp_client.go
 
-use std::{future::Future, net::IpAddr};
-
 use bytes::Bytes;
 use data_encoding::BASE64URL;
 use http_body_util::Empty;
@@ -316,23 +314,6 @@ fn url_port(url: &Url) -> Option<u16> {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum DnsError {
-    #[error(transparent)]
-    Timeout(#[from] tokio::time::error::Elapsed),
-    #[error("No response")]
-    NoResponse,
-    #[error("Resolve failed ipv4: {ipv4}, ipv6 {ipv6}")]
-    ResolveBoth {
-        ipv4: Box<DnsError>,
-        ipv6: Box<DnsError>,
-    },
-    #[error("missing host")]
-    MissingHost,
-    #[error(transparent)]
-    Resolve(#[from] hickory_resolver::ResolveError),
-}
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -345,8 +326,6 @@ mod tests {
     #[test]
     #[traced_test]
     fn test_host_header_value() -> TestResult {
-        let _guard = iroh_test::logging::setup();
-
         let cases = [
             (
                 "https://euw1-1.relay.iroh.network.",
