@@ -61,6 +61,9 @@ pub enum ConnectError {
     NoLocalAddr,
     #[error("tls connection failed")]
     Tls(#[source] std::io::Error),
+    #[cfg(wasm_browser)]
+    #[error("The relay protocol is not available in browsers")]
+    RelayProtoNotAvailable,
 }
 
 /// Dialing errors
@@ -88,35 +91,6 @@ pub enum DialError {
     ProxyInvalidTlsServername,
     #[error("Invliad proxy target port")]
     ProxyInvalidTargetPort,
-}
-
-/// Client related errors
-#[allow(missing_docs)]
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum Error {
-    #[cfg(not(wasm_browser))]
-    #[error(transparent)]
-    Dns(#[from] DnsError),
-    #[error(transparent)]
-    Hyper(#[from] hyper::Error),
-    #[error(transparent)]
-    InvalidDnsName(#[from] rustls::pki_types::InvalidDnsNameError),
-    #[error(transparent)]
-    ProtoRelay(#[from] crate::protos::relay::Error),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    #[error("Timeout")]
-    Timeout(#[from] time::Elapsed),
-    #[error(transparent)]
-    Http(#[from] hyper::http::Error),
-    #[error(transparent)]
-    Utf8(#[from] std::str::Utf8Error),
-    #[cfg(wasm_browser)]
-    #[error("The relay protocol is not available in browsers")]
-    RelayProtoNotAvailable,
-    #[error(transparent)]
-    Websocket(#[from] tokio_tungstenite_wasm::Error),
 }
 
 /// Build a Client.
@@ -233,7 +207,7 @@ impl ClientBuilder {
                 (conn, Some(local_addr))
             }
             #[cfg(wasm_browser)]
-            Protocol::Relay => return Err(Error::RelayProtoNotAvailable),
+            Protocol::Relay => return Err(ConnectError::RelayProtoNotAvailable),
         };
 
         event!(
