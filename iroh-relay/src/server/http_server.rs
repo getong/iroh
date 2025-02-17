@@ -821,7 +821,7 @@ mod tests {
     }
 
     fn process_msg(
-        msg: Option<Result<ReceivedMessage, crate::client::Error>>,
+        msg: Option<Result<ReceivedMessage, crate::client::RecvError>>,
     ) -> Option<(PublicKey, Bytes)> {
         match msg {
             Some(Err(e)) => {

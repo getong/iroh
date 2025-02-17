@@ -20,7 +20,7 @@ use tracing::warn;
 use tracing::{debug, event, trace, Level};
 use url::Url;
 
-pub use self::conn::{ConnSendError, HandshakeError, ReceivedMessage, SendMessage};
+pub use self::conn::{ConnSendError, HandshakeError, ReceivedMessage, RecvError, SendMessage};
 #[cfg(not(wasm_browser))]
 use crate::dns::{DnsResolver, Error as DnsError};
 use crate::{
@@ -110,8 +110,6 @@ pub enum Error {
     Timeout(#[from] time::Elapsed),
     #[error(transparent)]
     Http(#[from] hyper::http::Error),
-    #[error("Unexpected frame received {0}")]
-    UnexpectedFrame(crate::protos::relay::FrameType),
     #[error(transparent)]
     Utf8(#[from] std::str::Utf8Error),
     #[cfg(wasm_browser)]
@@ -298,7 +296,7 @@ impl Client {
 }
 
 impl Stream for Client {
-    type Item = Result<ReceivedMessage, Error>;
+    type Item = Result<ReceivedMessage, RecvError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Option<Self::Item>> {
         Pin::new(&mut self.conn).poll_next(cx)
@@ -384,7 +382,7 @@ impl ClientStream {
 }
 
 impl Stream for ClientStream {
-    type Item = Result<ReceivedMessage, Error>;
+    type Item = Result<ReceivedMessage, RecvError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Option<Self::Item>> {
         Pin::new(&mut self.stream).poll_next(cx)
