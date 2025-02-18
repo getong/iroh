@@ -74,6 +74,7 @@ pub enum DialError {
     #[error("Invliad target port")]
     InvalidTargetPort,
     #[error(transparent)]
+    #[cfg(not(wasm_browser))]
     Dns(#[from] DnsError),
     #[error("Timeout")]
     Timeout(#[from] time::Elapsed),
