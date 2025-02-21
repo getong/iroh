@@ -24,6 +24,7 @@ use hyper::{
 };
 use n0_future::{task, time};
 use rustls::client::Resumption;
+use snafu::ResultExt;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{error, info_span, Instrument};
 
@@ -64,7 +65,7 @@ impl ClientBuilder {
 
         let local_addr = tcp_stream
             .local_addr()
-            .map_err(|_| ConnectError::NoLocalAddr)?;
+            .map_err(|_| NoLocalAddrSnafu.build())?;
 
         debug!(server_addr = ?tcp_stream.peer_addr(), %local_addr, "TCP stream connected");
 
@@ -72,13 +73,13 @@ impl ClientBuilder {
             debug!("Starting TLS handshake");
             let hostname = self
                 .tls_servername()
-                .ok_or(ConnectError::InvalidTlsServername)?;
+                .ok_or_else(|| InvalidTlsServernameSnafu.build())?;
 
             let hostname = hostname.to_owned();
             let tls_stream = tls_connector
                 .connect(hostname, tcp_stream)
                 .await
-                .map_err(ConnectError::Tls)?;
+                .context(TlsSnafu)?;
             debug!("tls_connector connect success");
             Self::start_upgrade(tls_stream, url).await?
         } else {
@@ -87,13 +88,18 @@ impl ClientBuilder {
         };
 
         if response.status() != hyper::StatusCode::SWITCHING_PROTOCOLS {
-            return Err(ConnectError::UnexpectedUpgradeStatus(response.status()));
+            UnexpectedUpgradeStatusSnafu {
+                code: response.status(),
+            }
+            .fail()?;
         }
+        let err = std::io::Error::new(std::io::ErrorKind::Other, "other".to_string());
+
+        Err(err).context(TlsSnafu)?;
+        // NoLocalAddrSnafu.fail()?;
 
         debug!("starting upgrade");
-        let upgraded = hyper::upgrade::on(response)
-            .await
-            .map_err(ConnectError::Upgrade)?;
+        let upgraded = hyper::upgrade::on(response).await.context(UpgradeSnafu)?;
 
         debug!("connection upgraded");
         let conn = downcast_upgrade(upgraded).expect("must use TcpStream or client::TlsStream");
@@ -112,14 +118,18 @@ impl ClientBuilder {
         T: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
         use hyper_util::rt::TokioIo;
-        let host_header_value = host_header_value(relay_url.clone())
-            .ok_or_else(|| ConnectError::InvalidRelayUrl(relay_url.into()))?;
+        let host_header_value = host_header_value(relay_url.clone()).ok_or_else(|| {
+            InvalidRelayUrlSnafu {
+                url: Url::from(relay_url),
+            }
+            .build()
+        })?;
 
         let io = TokioIo::new(io);
         let (mut request_sender, connection) = hyper::client::conn::http1::Builder::new()
             .handshake(io)
             .await
-            .map_err(ConnectError::Upgrade)?;
+            .context(UpgradeSnafu)?;
         task::spawn(
             // This task drives the HTTP exchange, completes once connection is upgraded.
             async move {
@@ -141,10 +151,7 @@ impl ClientBuilder {
             .header(HOST, host_header_value)
             .body(http_body_util::Empty::<hyper::body::Bytes>::new())
             .expect("fixed config");
-        request_sender
-            .send_request(req)
-            .await
-            .map_err(ConnectError::Upgrade)
+        request_sender.send_request(req).await.context(UpgradeSnafu)
     }
 
     fn tls_servername(&self) -> Option<rustls::pki_types::ServerName> {

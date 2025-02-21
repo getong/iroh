@@ -15,6 +15,7 @@ use n0_future::{
     split::{split, SplitSink, SplitStream},
     time, Sink, Stream,
 };
+use snafu::{Backtrace, Snafu};
 #[cfg(any(test, feature = "test-utils"))]
 use tracing::warn;
 use tracing::{debug, event, trace, Level};
@@ -38,32 +39,84 @@ mod util;
 
 /// Connection errors
 #[allow(missing_docs)]
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Snafu)]
 #[non_exhaustive]
 pub enum ConnectError {
-    #[error("Invalid URL for websocket {0}")]
-    InvalidWebsocketUrl(Url),
-    #[error("Invalid relay URL {0}")]
-    InvalidRelayUrl(Url),
-    #[error(transparent)]
-    Websocket(#[from] tokio_tungstenite_wasm::Error),
-    #[error(transparent)]
-    Handshake(#[from] HandshakeError),
-    #[error(transparent)]
-    Dial(#[from] DialError),
-    #[error("Unexpected status during upgrade: {0}")]
-    UnexpectedUpgradeStatus(hyper::StatusCode),
-    #[error("Failed to upgrade response")]
-    Upgrade(#[source] hyper::Error),
-    #[error("Invalid TLS servername")]
-    InvalidTlsServername,
-    #[error("No local address available")]
-    NoLocalAddr,
-    #[error("tls connection failed")]
-    Tls(#[source] std::io::Error),
+    #[snafu(display("Invalid URL for websocket: {url}"))]
+    InvalidWebsocketUrl {
+        url: Url,
+        backtrace: Option<Backtrace>,
+        #[snafu(implicit)]
+        span_trace: n0_snafu::SpanTrace,
+    },
+    #[snafu(display("Invalid relay URL: {url}"))]
+    InvalidRelayUrl {
+        url: Url,
+        backtrace: Option<Backtrace>,
+        #[snafu(implicit)]
+        span_trace: n0_snafu::SpanTrace,
+    },
+    #[snafu(transparent)]
+    Websocket {
+        source: tokio_tungstenite_wasm::Error,
+        backtrace: Option<Backtrace>,
+        #[snafu(implicit)]
+        span_trace: n0_snafu::SpanTrace,
+    },
+    #[snafu(transparent)]
+    Handshake {
+        source: HandshakeError,
+        backtrace: Option<Backtrace>,
+        #[snafu(implicit)]
+        span_trace: n0_snafu::SpanTrace,
+    },
+    #[snafu(transparent)]
+    Dial {
+        source: DialError,
+        backtrace: Option<Backtrace>,
+        #[snafu(implicit)]
+        span_trace: n0_snafu::SpanTrace,
+    },
+    #[snafu(display("Unexpected status during upgrade: {code}"))]
+    UnexpectedUpgradeStatus {
+        code: hyper::StatusCode,
+        backtrace: Option<Backtrace>,
+        #[snafu(implicit)]
+        span_trace: n0_snafu::SpanTrace,
+    },
+    #[snafu(display("Failed to upgrade response"))]
+    Upgrade {
+        source: hyper::Error,
+        backtrace: Option<Backtrace>,
+        #[snafu(implicit)]
+        span_trace: n0_snafu::SpanTrace,
+    },
+    #[snafu(display("Invalid TLS servername"))]
+    InvalidTlsServername {
+        backtrace: Option<Backtrace>,
+        #[snafu(implicit)]
+        span_trace: n0_snafu::SpanTrace,
+    },
+    #[snafu(display("No local address available"))]
+    NoLocalAddr {
+        backtrace: Option<Backtrace>,
+        #[snafu(implicit)]
+        span_trace: n0_snafu::SpanTrace,
+    },
+    #[snafu(display("tls connection failed"))]
+    Tls {
+        source: std::io::Error,
+        backtrace: Option<Backtrace>,
+        #[snafu(implicit)]
+        span_trace: n0_snafu::SpanTrace,
+    },
     #[cfg(wasm_browser)]
-    #[error("The relay protocol is not available in browsers")]
-    RelayProtoNotAvailable,
+    #[snafu(display("The relay protocol is not available in browsers"))]
+    RelayProtoNotAvailable {
+        backtrace: Option<Backtrace>,
+        #[snafu(implicit)]
+        span_trace: n0_snafu::SpanTrace,
+    },
 }
 
 /// Dialing errors
@@ -229,7 +282,12 @@ impl ClientBuilder {
         // We need to use the ws:// or wss:// schemes when connecting with websockets, though.
         dial_url
             .set_scheme(if self.use_tls() { "wss" } else { "ws" })
-            .map_err(|_| ConnectError::InvalidWebsocketUrl(dial_url.clone()))?;
+            .map_err(|_| {
+                InvalidWebsocketUrlSnafu {
+                    url: dial_url.clone(),
+                }
+                .build()
+            })?;
 
         debug!(%dial_url, "Dialing relay by websocket");
 

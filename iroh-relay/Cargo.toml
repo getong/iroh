@@ -70,6 +70,8 @@ webpki-roots = "0.26"
 data-encoding = "2.6.0"
 lru = "0.12"
 z32 = "1.0.3"
+snafu = { version = "0.8.5", features = ["rust_1_81"] }
+n0-snafu = { path = "../../n0-snafu" }
 
 # server feature
 anyhow = { version = "1", optional = true }
@@ -129,7 +131,7 @@ tracing-test = "0.2.5"
 cfg_aliases = { version = "0.2" }
 
 [features]
-default = ["metrics"]
+default = ["metrics", "server", "test-utils"]
 server = [
     "dep:anyhow",
     "dep:clap",
